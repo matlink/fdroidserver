@@ -1002,11 +1002,13 @@ def archive_old_apks(apps, apks, archapks, repodir, archivedir, defaultkeepversi
                 apks.remove(apk)
 
 
+def create_metadata_and_update():
+    main(force_metadata_creation=True)
+
 config = None
 options = None
 
-
-def main():
+def main(force_metadata_creation=False):
 
     global config, options
 
@@ -1014,7 +1016,7 @@ def main():
     parser = OptionParser()
     parser.add_option("--create-key", action="store_true", default=False,
                       help="Create a repo signing key in a keystore")
-    parser.add_option("-c", "--create-metadata", action="store_true", default=False,
+    parser.add_option("-c", "--create-metadata", action="store_true", default=force_metadata_creation,
                       help="Create skeleton metadata files that are missing")
     parser.add_option("--delete-unknown", action="store_true", default=False,
                       help="Delete APKs without metadata from the repo")
