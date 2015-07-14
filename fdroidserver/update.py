@@ -1001,17 +1001,21 @@ def archive_old_apks(apps, apks, archapks, repodir, archivedir, defaultkeepversi
                 archapks.append(apk)
                 apks.remove(apk)
 
-
-def create_metadata_and_update():
-    main(force_metadata_creation=True)
+# Forces metadata creation while updating
+# Used as a library, from a Python environment
+def create_metadata_and_update(**kwargs):
+    kwargs['force_metadata_creation'] = True
+    main(**kwargs)
 
 config = None
 options = None
 
-def main(force_metadata_creation=False):
-
+def main(**kwargs):
     global config, options
 
+    force_metadata_creation = False
+    if 'force_metadata_creation' in kwargs:
+        force_metadata_creation = kwargs['force_metadata_creation']
     # Parse command line...
     parser = OptionParser()
     parser.add_option("--create-key", action="store_true", default=False,
