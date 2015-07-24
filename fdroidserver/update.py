@@ -1134,7 +1134,8 @@ def main(**kwargs):
                 f.write("Web Site:\n")
                 f.write("Source Code:\n")
                 f.write("Issue Tracker:\n")
-                f.write("Changelog:\n")
+                # Changelog causes some issues
+                # f.write("Changelog:\n")
                 f.write("Summary:" + apk['name'] + "\n")
                 f.write("Description:\n")
                 f.write(apk['name'] + "\n")
