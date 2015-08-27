@@ -27,6 +27,7 @@ import socket
 import zipfile
 import hashlib
 import pickle
+from datetime import datetime, timedelta
 from xml.dom.minidom import Document
 from optparse import OptionParser
 import time
@@ -542,6 +543,19 @@ def scan_apks(apps, apkcache, repodir, knownapks):
 
             apk = zipfile.ZipFile(apkfile, 'r')
 
+            # if an APK has files newer than the system time, suggest updating
+            # the system clock.  This is useful for offline systems, used for
+            # signing, which do not have another source of clock sync info. It
+            # has to be more than 24 hours newer because ZIP/APK files do not
+            # store timezone info
+            info = apk.getinfo('AndroidManifest.xml')
+            dt_obj = datetime(*info.date_time)
+            checkdt = dt_obj - timedelta(1)
+            if datetime.today() < checkdt:
+                logging.warn('System clock is older than manifest in: '
+                             + apkfilename + '\nSet clock to that time using:\n'
+                             + 'sudo date -s "' + str(dt_obj) + '"')
+
             iconfilename = "%s.%s.png" % (
                 thisinfo['id'],
                 thisinfo['versioncode'])
@@ -1007,6 +1021,28 @@ def create_metadata_and_update(**kwargs):
     kwargs['force_metadata_creation'] = True
     main(**kwargs)
 
+def add_apks_to_per_app_repos(repodir, apks):
+    apks_per_app = dict()
+    for apk in apks:
+        apk['per_app_dir'] = os.path.join(apk['id'], 'fdroid')
+        apk['per_app_repo'] = os.path.join(apk['per_app_dir'], 'repo')
+        apk['per_app_icons'] = os.path.join(apk['per_app_repo'], 'icons')
+        apks_per_app[apk['id']] = apk
+
+        if not os.path.exists(apk['per_app_icons']):
+            logging.info('Adding new repo for only ' + apk['id'])
+            os.makedirs(apk['per_app_icons'])
+
+        apkpath = os.path.join(repodir, apk['apkname'])
+        shutil.copy(apkpath, apk['per_app_repo'])
+        apksigpath = apkpath + '.sig'
+        if os.path.exists(apksigpath):
+            shutil.copy(apksigpath, apk['per_app_repo'])
+        apkascpath = apkpath + '.asc'
+        if os.path.exists(apkascpath):
+            shutil.copy(apkascpath, apk['per_app_repo'])
+
+
 config = None
 options = None
 
@@ -1111,14 +1147,11 @@ def main(**kwargs):
             apkcache = pickle.load(cf)
     else:
         apkcache = {}
-    cachechanged = False
 
     delete_disabled_builds(apps, apkcache, repodirs)
 
     # Scan all apks in the main repo
-    apks, cc = scan_apks(apps, apkcache, repodirs[0], knownapks)
-    if cc:
-        cachechanged = True
+    apks, cachechanged = scan_apks(apps, apkcache, repodirs[0], knownapks)
 
     # Generate warnings for apk's with no metadata (or create skeleton
     # metadata files, if requested on the command line)
@@ -1210,6 +1243,20 @@ def main(**kwargs):
     # (we had to wait until we'd scanned the apks to do this, because mostly the
     # name comes from there!)
     sortedids = sorted(apps.iterkeys(), key=lambda appid: apps[appid]['Name'].upper())
+
+    # APKs are placed into multiple repos based on the app package, providing
+    # per-app subscription feeds for nightly builds and things like it
+    if config['per_app_repos']:
+        add_apks_to_per_app_repos(repodirs[0], apks)
+        for appid, app in apps.iteritems():
+            repodir = os.path.join(appid, 'fdroid', 'repo')
+            appdict = dict()
+            appdict[appid] = app
+            if os.path.isdir(repodir):
+                make_index(appdict, [appid], apks, repodir, False, categories)
+            else:
+                logging.info('Skipping index generation for ' + appid)
+        return
 
     if len(repodirs) > 1:
         archive_old_apks(apps, apks, archapks, repodirs[0], repodirs[1], config['archive_older'])

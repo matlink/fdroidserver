@@ -117,6 +117,8 @@ Ruby (debian packages ruby and rubygems)
 @item
 Vagrant (unpackaged, tested on v1.4.3)
 @item
+vagrant-cachier plugin (unpackaged): `vagrant plugin install vagrant-cachier`
+@item
 Paramiko (debian package python-paramiko)
 @item
 Imaging (debian package python-imaging)
@@ -456,7 +458,7 @@ following them). In fact, you can standardise all the metadata in a single
 command, without changing the functional content, by running:
 
 @example
-fdroid rewritemetadata
+fdroid rewritemeta
 @end example
 
 The following sections describe the fields recognised within the file.
@@ -1028,6 +1030,13 @@ builds happen correctly.
 List of Gradle tasks to be run before the assemble task in a Gradle project
 build.
 
+@item gradleprops=<prop1>[,<prop2>,...]
+List of Gradle properties to pass via the command line to Gradle. A property
+can be of the form @code{foo} or of the form @code{key=value}.
+
+For example: @code{gradleprops=enableFoo,someSetting=bar} will result in
+@code{gradle -PenableFoo -PsomeSetting=bar}.
+
 @item antcommands=<target1>[,<target2>,...]
 Specify an alternate set of Ant commands (target) instead of the default
 'release'. It can't be given any flags, such as the path to a build.xml.
@@ -1252,6 +1261,10 @@ specify the package name to search for. Useful when apps have a static package
 name but change it programmatically in some app flavors, by e.g. appending
 ".open" or ".free" at the end of the package name.
 
+You can also use @code{Ignore} to ignore package name searching. This should
+only be used in some specific cases, for example if the app's build.gradle
+file does not contain the package name.
+
 @node Update Check Data
 @section Update Check Data
 
@@ -1318,6 +1331,9 @@ used by Android to determine version order and by F-Droid client to determine
 which version should be recommended.
 
 This field is normally automatically updated - see Update Check Mode.
+
+If not set or set to @code{0}, clients will recommend the highest version they
+can, as if the @code{Current Version Code} was infinite.
 
 This is converted to (@code{<marketvercode>}) in the public index file.
 
@@ -1422,7 +1438,7 @@ applications.
 @section Setting up a build server
 
 In addition to the basic setup previously described, you will also need
-a Vagrant-compatible Debian Testing base box called 'testing32' (or testing64
+a Vagrant-compatible Debian Testing base box called 'jessie32' (or jessie64
 for a 64-bit VM, if you want it to be much slower, and require more disk
 space).
 
@@ -1502,7 +1518,7 @@ SDK including these:
 @example
 cd /path/to/android-sdk/platforms
 tar czf android-19.tar.gz android-19
-mv android-19.tar.gz /path/to/buildserver/addons/cache/platforms/}
+mv android-19.tar.gz /path/to/buildserver/addons/cache/platforms/
 @end example
 
 If you have already built a buildserver it is also possible to get this

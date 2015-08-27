@@ -3,16 +3,17 @@
 # Copy this file to config.py, then amend the settings below according to
 # your system configuration.
 
-# Path to the Android SDK
-sdk_path = "$ANDROID_HOME"
+# Custom path to the Android SDK, defaults to $ANDROID_HOME
+# sdk_path = "/opt/android-sdk"
 
-# Path to various versions of the Android NDK
-# Most users will have the latest at $ANDROID_NDK, which is used by default
-# If a version is missing or assigned to None, it is assumed not installed
-ndk_paths = {
-    'r9b': None,
-    'r10e': "$ANDROID_NDK"
-}
+# Custom paths to various versions of the Android NDK, defaults to 'r10e' set
+# to $ANDROID_NDK.  Most users will have the latest at $ANDROID_NDK, which is
+# used by default.  If a version is missing or assigned to None, it is assumed
+# not installed.
+# ndk_paths = {
+#    'r9b': "/opt/android-ndk-r9b",
+#    'r10e': "/opt/android-ndk",
+# }
 
 # Build tools version to be used
 build_tools = "22.0.1"
@@ -54,6 +55,12 @@ archive_icon = "fdroid-icon.png"
 archive_description = """
 The repository of older versions of applications from the main demo repository.
 """
+
+# Normally, all apps are collected into a single app repository, like on
+# https://f-droid.org.  For certain situations, it is better to make a repo
+# that is made up of APKs only from a single app.  For example, an automated
+# build server that publishes nightly builds.
+# per_app_repos = True
 
 # `fdroid update` will create a link to the current version of a given app.
 # This provides a static path to the current APK.  To disable the creation of
@@ -210,5 +217,5 @@ build_server_always = False
 # Only the fields listed here are supported, defaults shown
 char_limits = {
     'Summary': 50,
-    'Description': 1500
+    'Description': 1500,
 }

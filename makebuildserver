@@ -41,6 +41,8 @@ parser.add_option("-v", "--verbose", action="store_true", default=False,
                   help="Spew out even more information than normal")
 parser.add_option("-c", "--clean", action="store_true", default=False,
                   help="Build from scratch, rather than attempting to update the existing server")
+parser.add_option("--debian-mirror", default="http://ftp.uk.debian.org/debian/",
+                  help="Use the specified Debian mirror in the box's /etc/apt/sources.list.")
 options, args = parser.parse_args()
 
 config = {}
@@ -62,9 +64,9 @@ if not os.path.exists(cachedir):
     os.mkdir(cachedir)
 
 cachefiles = [
-    ('android-sdk_r24.3.3-linux.tgz',
-     'https://dl.google.com/android/android-sdk_r24.3.3-linux.tgz',
-     'a05023aaf149d40a0a848ad49d5c6b43ec730443efb89d1dfa584a132a642bdf'),
+    ('android-sdk_r24.3.4-linux.tgz',
+     'https://dl.google.com/android/android-sdk_r24.3.4-linux.tgz',
+     '886412375d8fe6e49a1583e57a8a36a47943666da681701ba9ad1ab7236e83ea'),
     ('gradle-1.4-bin.zip',
      'https://services.gradle.org/distributions/gradle-1.4-bin.zip',
      'cd99e85fbcd0ae8b99e81c9992a2f10cceb7b5f009c3720ef3a0078f4f92e94e'),
@@ -101,6 +103,12 @@ cachefiles = [
     ('gradle-2.4-bin.zip',
      'https://services.gradle.org/distributions/gradle-2.4-bin.zip',
      'c4eaecc621a81f567ded1aede4a5ddb281cc02a03a6a87c4f5502add8fc2f16f'),
+    ('gradle-2.5-bin.zip',
+     'https://services.gradle.org/distributions/gradle-2.5-bin.zip',
+     '3f953e0cb14bb3f9ebbe11946e84071547bf5dfd575d90cfe9cc4e788da38555'),
+    ('gradle-2.6-bin.zip',
+     'https://services.gradle.org/distributions/gradle-2.6-bin.zip',
+     '18a98c560af231dfa0d3f8e0802c20103ae986f12428bb0a6f5396e8f14e9c83'),
     ('Kivy-1.7.2.tar.gz',
      'https://pypi.python.org/packages/source/K/Kivy/Kivy-1.7.2.tar.gz',
      '0485e2ef97b5086df886eb01f8303cb542183d2d71a159466f99ad6c8a1d03f1'),
@@ -158,14 +166,26 @@ for f, src, shasum in cachefiles:
 
     wanted.append(f)
 
+# allow specifying a list/tuple that includes cached local copy
+if type(config['baseboxurl']) in (list, tuple) or config['baseboxurl'][0] in ('(', '['):
+    baseboxurl = config['baseboxurl']
+else:
+    baseboxurl = '"{0}"'.format(config['baseboxurl'])
 
 # Generate an appropriate Vagrantfile for the buildserver, based on our
 # settings...
 vagrantfile = """
 Vagrant.configure("2") do |config|
 
+  if Vagrant.has_plugin?("vagrant-cachier")
+    config.cache.scope = :box
+    config.cache.auto_detect = false
+    config.cache.enable :apt
+    config.cache.enable :chef
+  end
+
   config.vm.box = "{0}"
-  config.vm.box_url = "{1}"
+  config.vm.box_url = {1}
 
   config.vm.provider "virtualbox" do |v|
     v.customize ["modifyvm", :id, "--memory", "{2}"]
@@ -174,13 +194,14 @@ Vagrant.configure("2") do |config|
 
   config.vm.provision :shell, :path => "fixpaths.sh"
 """.format(config['basebox'],
-           config['baseboxurl'],
+           baseboxurl,
            config['memory'],
            config.get('cpus', 1))
 if 'aptproxy' in config and config['aptproxy']:
     vagrantfile += """
   config.vm.provision :shell, :inline => 'sudo echo "Acquire::http {{ Proxy \\"{0}\\"; }};" > /etc/apt/apt.conf.d/02proxy && sudo apt-get update'
 """.format(config['aptproxy'])
+
 vagrantfile += """
   config.vm.provision :chef_solo do |chef|
     chef.cookbooks_path = "cookbooks"
@@ -189,6 +210,7 @@ vagrantfile += """
       :settings => {
         :sdk_loc => "/home/vagrant/android-sdk",
         :ndk_loc => "/home/vagrant/android-ndk",
+        :debian_mirror => "%s",
         :user => "vagrant"
       }
     }
@@ -199,7 +221,7 @@ vagrantfile += """
     chef.add_recipe "kivy"
   end
 end
-"""
+""" % (options.debian_mirror)
 
 # Check against the existing Vagrantfile, and if they differ, we need to
 # create a new box:
@@ -223,7 +245,7 @@ if writevf:
 
 
 print "Configuring build server VM"
-returncode, out = vagrant(['up'], serverdir, printout=True)
+returncode, out = vagrant(['up', '--provision'], serverdir, printout=True)
 with open(os.path.join(serverdir, 'up.log'), 'w') as log:
     log.write(out)
 if returncode != 0:

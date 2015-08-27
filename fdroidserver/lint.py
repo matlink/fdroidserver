@@ -22,6 +22,7 @@ import re
 import logging
 import common
 import metadata
+import sys
 from collections import Counter
 from sets import Set
 
@@ -30,12 +31,13 @@ options = None
 
 
 def enforce_https(domain):
-    return (re.compile(r'.*[^sS]://[^/]*' + re.escape(domain) + r'/.*'),
+    return (re.compile(r'.*[^sS]://[^/]*' + re.escape(domain) + r'(/.*)?'),
             domain + " URLs should always use https://")
 
 https_enforcings = [
     enforce_https('github.com'),
     enforce_https('gitlab.com'),
+    enforce_https('bitbucket.org'),
     enforce_https('gitorious.org'),
     enforce_https('apache.org'),
     enforce_https('google.com'),
@@ -43,12 +45,22 @@ https_enforcings = [
     enforce_https('googlecode.com'),
 ]
 
-http_warnings = https_enforcings + [
+
+def forbid_shortener(domain):
+    return (re.compile(r'https?://[^/]*' + re.escape(domain) + r'/.*'),
+            "URL shorteners should not be used")
+
+http_url_shorteners = [
+    forbid_shortener('goo.gl'),
+    forbid_shortener('t.co'),
+    forbid_shortener('ur1.ca'),
+]
+
+http_warnings = https_enforcings + http_url_shorteners + [
     (re.compile(r'.*github\.com/[^/]+/[^/]+\.git'),
      "Appending .git is not necessary"),
-    # TODO enable in August 2015, when Google Code goes read-only
-    # (re.compile(r'.*://code\.google\.com/.*'),
-    #  "code.google.com will be soon switching down, perhaps the project moved to github.com?"),
+    (re.compile(r'(.*/blob/master/|.*raw\.github.com/[^/]*/[^/]*/master/)'),
+     "Use /HEAD/ instead of /master/ to point at a file in the default branch"),
 ]
 
 regex_warnings = {
@@ -61,6 +73,10 @@ regex_warnings = {
     'Issue Tracker': http_warnings + [
         (re.compile(r'.*github\.com/[^/]+/[^/]+[/]*$'),
          "/issues is missing"),
+    ],
+    'Donate': http_warnings + [
+        (re.compile(r'.*flattr\.com'),
+         "Flattr donation methods belong in the FlattrID flag"),
     ],
     'Changelog': http_warnings + [
     ],
@@ -106,6 +122,8 @@ categories = Set([
     "Wallpaper",
 ])
 
+desc_url = re.compile("[^[]\[([^ ]+)( |\]|$)")
+
 
 def main():
 
@@ -137,6 +155,8 @@ def main():
     allapps = metadata.read_metadata(xref=False)
     apps = common.read_app_args(args, allapps, False)
 
+    filling_ucms = re.compile('^(Tags.*|RepoManifest.*)')
+
     for appid, app in apps.iteritems():
         if app['Disabled']:
             continue
@@ -144,8 +164,15 @@ def main():
         curid = appid
         count['app_total'] += 1
 
+        # enabled_builds = 0
+        lowest_vercode = -1
         curbuild = None
         for build in app['builds']:
+            if not build['disable']:
+                # enabled_builds += 1
+                vercode = int(build['vercode'])
+                if lowest_vercode == -1 or vercode < lowest_vercode:
+                    lowest_vercode = vercode
             if not curbuild or int(build['vercode']) > int(curbuild['vercode']):
                 curbuild = build
 
@@ -169,6 +196,21 @@ def main():
         if app['Web Site'] and app['Source Code']:
             if app['Web Site'].lower() == app['Source Code'].lower():
                 warn("Website '%s' is just the app's source code link" % app['Web Site'])
+
+        if filling_ucms.match(app['Update Check Mode']):
+            if all(app[f] == metadata.app_defaults[f] for f in [
+                    'Auto Name',
+                    'Current Version',
+                    'Current Version Code',
+                    ]):
+                warn("UCM is set but it looks like checkupdates hasn't been run yet")
+
+        if app['Update Check Name'] == appid:
+            warn("Update Check Name is set to the known app id - it can be removed")
+
+        cvc = int(app['Current Version Code'])
+        if cvc > 0 and cvc < lowest_vercode:
+            warn("Current Version Code is lower than any enabled build")
 
         # Missing or incorrect categories
         if not app['Categories']:
@@ -200,15 +242,41 @@ def main():
                 or any(not desc[l - 1] and not desc[l] for l in range(1, len(desc)))):
             warn("Description has an extra empty line")
 
+        # Check for lists using the wrong characters
+        validchars = ['*', '#']
+        lchar = ''
+        lcount = 0
+        for l in app['Description']:
+            if len(l) < 1:
+                continue
+
+            for um in desc_url.finditer(l):
+                url = um.group(1)
+                for m, r in http_warnings:
+                    if m.match(url):
+                        warn("URL '%s' in Description: %s" % (url, r))
+
+            c = l.decode('utf-8')[0]
+            if c == lchar:
+                lcount += 1
+                if lcount > 3 and lchar not in validchars:
+                    warn("Description has a list (%s) but it isn't bulleted (*) nor numbered (#)" % lchar)
+                    break
+            else:
+                lchar = c
+                lcount = 1
+
         # Regex checks in all kinds of fields
         for f in regex_warnings:
             for m, r in regex_warnings[f]:
-                t = metadata.metafieldtype(f)
-                if t == 'string':
-                    if m.match(app[f]):
-                        warn("%s '%s': %s" % (f, app[f], r))
-                elif t == 'multiline':
-                    for l in app[f]:
+                v = app[f]
+                if type(v) == str:
+                    if v is None:
+                        continue
+                    if m.match(v):
+                        warn("%s '%s': %s" % (f, v, r))
+                elif type(v) == list:
+                    for l in v:
                         if m.match(l):
                             warn("%s at line '%s': %s" % (f, l, r))
 
@@ -231,6 +299,8 @@ def main():
 
     logging.info("Found a total of %i warnings in %i apps out of %i total." % (
         count['warn'], count['app'], count['app_total']))
+
+    sys.exit(1 if count['warn'] > 0 else 0)
 
 if __name__ == "__main__":
     main()

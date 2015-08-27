@@ -22,13 +22,13 @@ import sys
 import re
 import shutil
 import glob
+import requests
 import stat
 import subprocess
 import time
 import operator
 import Queue
 import threading
-import magic
 import logging
 import hashlib
 import socket
@@ -53,11 +53,12 @@ default_config = {
         'r9b': None,
         'r10e': "$ANDROID_NDK"
     },
-    'build_tools': "22.0.1",
+    'build_tools': "23.0.0",
     'ant': "ant",
     'mvn3': "mvn",
     'gradle': 'gradle',
     'sync_from_local_copy_dir': False,
+    'per_app_repos': False,
     'make_current_version_link': True,
     'current_version_name_source': 'Name',
     'update_stats': False,
@@ -70,8 +71,8 @@ default_config = {
     'keystore': 'keystore.jks',
     'smartcardoptions': [],
     'char_limits': {
-        'Summary': 50,
-        'Description': 1500
+        'Summary': 80,
+        'Description': 4000
     },
     'keyaliases': {},
     'repo_url': "https://MyFirstFDroidRepo.org/fdroid/repo",
@@ -118,6 +119,14 @@ def fill_config_defaults(thisconfig):
             if exp is not None:
                 thisconfig[k][k2] = exp
                 thisconfig[k][k2 + '_orig'] = v
+
+
+def regsub_file(pattern, repl, path):
+    with open(path, 'r') as f:
+        text = f.read()
+    text = re.sub(pattern, repl, text)
+    with open(path, 'w') as f:
+        f.write(text)
 
 
 def read_config(opts, config_file='config.py'):
@@ -194,7 +203,7 @@ def read_config(opts, config_file='config.py'):
 
 def get_ndk_path(version):
     if version is None:
-        version = 'r10e'  # latest
+        version = 'r10e'  # falls back to latest
     paths = config['ndk_paths']
     if version not in paths:
         return ''
@@ -457,7 +466,7 @@ class vcs:
     # lifetime of the vcs object.
     # None is acceptable for 'rev' if you know you are cloning a clean copy of
     # the repo - otherwise it must specify a valid revision.
-    def gotorevision(self, rev):
+    def gotorevision(self, rev, refresh=True):
 
         if self.clone_failed:
             raise VCSException("Downloading the repository already failed once, not trying again.")
@@ -488,6 +497,8 @@ class vcs:
             shutil.rmtree(self.local)
 
         exc = None
+        if not refresh:
+            self.refreshed = True
 
         try:
             self.gotorevisionx(rev)
@@ -962,10 +973,9 @@ def remove_debuggable_flags(root_dir):
     logging.debug("Removing debuggable flags from %s" % root_dir)
     for root, dirs, files in os.walk(root_dir):
         if 'AndroidManifest.xml' in files:
-            path = os.path.join(root, 'AndroidManifest.xml')
-            p = FDroidPopen(['sed', '-i', 's/android:debuggable="[^"]*"//g', path], output=False)
-            if p.returncode != 0:
-                raise BuildException("Failed to remove debuggable flags of %s" % path)
+            regsub_file(r'android:debuggable="[^"]*"',
+                        '',
+                        os.path.join(root, 'AndroidManifest.xml'))
 
 
 # Extract some information from the AndroidManifest.xml at the given path.
@@ -1095,7 +1105,7 @@ class BuildException(FDroidException):
 # it, which may be a subdirectory of the actual project. If you want the base
 # directory of the project, pass 'basepath=True'.
 def getsrclib(spec, srclib_dir, subdir=None, basepath=False,
-              raw=False, prepare=True, preponly=False):
+              raw=False, prepare=True, preponly=False, refresh=True):
 
     number = None
     subdir = None
@@ -1120,7 +1130,7 @@ def getsrclib(spec, srclib_dir, subdir=None, basepath=False,
         vcs = getvcs(srclib["Repo Type"], srclib["Repo"], sdir)
         vcs.srclib = (name, number, sdir)
         if ref:
-            vcs.gotorevision(ref)
+            vcs.gotorevision(ref, refresh)
 
         if raw:
             return vcs
@@ -1171,7 +1181,7 @@ def getsrclib(spec, srclib_dir, subdir=None, basepath=False,
 #   'root' is the root directory, which may be the same as 'build_dir' or may
 #          be a subdirectory of it.
 #   'srclibpaths' is information on the srclibs being used
-def prepare_source(vcs, app, build, build_dir, srclib_dir, extlib_dir, onserver=False):
+def prepare_source(vcs, app, build, build_dir, srclib_dir, extlib_dir, onserver=False, refresh=True):
 
     # Optionally, the actual app source can be in a subdirectory
     if build['subdir']:
@@ -1181,7 +1191,7 @@ def prepare_source(vcs, app, build, build_dir, srclib_dir, extlib_dir, onserver=
 
     # Get a working copy of the right revision
     logging.info("Getting source for revision " + build['commit'])
-    vcs.gotorevision(build['commit'])
+    vcs.gotorevision(build['commit'], refresh)
 
     # Initialise submodules if required
     if build['submodules']:
@@ -1219,7 +1229,7 @@ def prepare_source(vcs, app, build, build_dir, srclib_dir, extlib_dir, onserver=
     if build['srclibs']:
         logging.info("Collecting source libraries")
         for lib in build['srclibs']:
-            srclibpaths.append(getsrclib(lib, srclib_dir, build, preponly=onserver))
+            srclibpaths.append(getsrclib(lib, srclib_dir, build, preponly=onserver, refresh=refresh))
 
     for name, number, libpath in srclibpaths:
         place_srclib(root_dir, int(number) if number else None, libpath)
@@ -1302,9 +1312,9 @@ def prepare_source(vcs, app, build, build_dir, srclib_dir, extlib_dir, onserver=
 
         if build['target']:
             n = build["target"].split('-')[1]
-            FDroidPopen(['sed', '-i',
-                         's@compileSdkVersion *[0-9]*@compileSdkVersion ' + n + '@g',
-                         'build.gradle'], cwd=root_dir, output=False)
+            regsub_file(r'compileSdkVersion[ =]+[0-9]+',
+                        r'compileSdkVersion %s' % n,
+                        os.path.join(root_dir, 'build.gradle'))
 
     # Remove forced debuggable flags
     remove_debuggable_flags(root_dir)
@@ -1316,34 +1326,27 @@ def prepare_source(vcs, app, build, build_dir, srclib_dir, extlib_dir, onserver=
             if not os.path.isfile(path):
                 continue
             if has_extension(path, 'xml'):
-                p = FDroidPopen(['sed', '-i',
-                                 's/android:versionName="[^"]*"/android:versionName="' + build['version'] + '"/g',
-                                 path], output=False)
-                if p.returncode != 0:
-                    raise BuildException("Failed to amend manifest")
+                regsub_file(r'android:versionName="[^"]*"',
+                            r'android:versionName="%s"' % build['version'],
+                            path)
             elif has_extension(path, 'gradle'):
-                p = FDroidPopen(['sed', '-i',
-                                 's/versionName *=* *.*/versionName = "' + build['version'] + '"/g',
-                                 path], output=False)
-                if p.returncode != 0:
-                    raise BuildException("Failed to amend build.gradle")
+                regsub_file(r"""(\s*)versionName[\s'"=]+.*""",
+                            r"""\1versionName '%s'""" % build['version'],
+                            path)
+
     if build['forcevercode']:
         logging.info("Changing the version code")
         for path in manifest_paths(root_dir, flavours):
             if not os.path.isfile(path):
                 continue
             if has_extension(path, 'xml'):
-                p = FDroidPopen(['sed', '-i',
-                                 's/android:versionCode="[^"]*"/android:versionCode="' + build['vercode'] + '"/g',
-                                 path], output=False)
-                if p.returncode != 0:
-                    raise BuildException("Failed to amend manifest")
+                regsub_file(r'android:versionCode="[^"]*"',
+                            r'android:versionCode="%s"' % build['vercode'],
+                            path)
             elif has_extension(path, 'gradle'):
-                p = FDroidPopen(['sed', '-i',
-                                 's/versionCode *=* *[0-9]*/versionCode = ' + build['vercode'] + '/g',
-                                 path], output=False)
-                if p.returncode != 0:
-                    raise BuildException("Failed to amend build.gradle")
+                regsub_file(r'versionCode[ =]+[0-9]+',
+                            r'versionCode %s' % build['vercode'],
+                            path)
 
     # Delete unwanted files
     if build['rm']:
@@ -1438,6 +1441,63 @@ def getpaths(build_dir, build, field):
     return paths
 
 
+def init_mime_type():
+    '''
+    There are two incompatible versions of the 'magic' module, one
+    that comes as part of libmagic, which is what Debian includes as
+    python-magic, then another called python-magic that is a separate
+    project that wraps libmagic.  The second is 'magic' on pypi, so
+    both need to be supported.  Then on platforms where libmagic is
+    not easily included, e.g. OSX and Windows, fallback to the
+    built-in 'mimetypes' module so this will work without
+    libmagic. Hence this function with the following hacks:
+    '''
+
+    init_path = ''
+    method = ''
+    ms = None
+
+    def mime_from_file(path):
+        try:
+            return magic.from_file(path, mime=True)
+        except UnicodeError:
+            return None
+
+    def mime_file(path):
+        try:
+            return ms.file(path)
+        except UnicodeError:
+            return None
+
+    def mime_guess_type(path):
+        return mimetypes.guess_type(path, strict=False)
+
+    try:
+        import magic
+        try:
+            ms = magic.open(magic.MIME_TYPE)
+            ms.load()
+            magic.from_file(init_path, mime=True)
+            method = 'from_file'
+        except AttributeError:
+            ms.file(init_path)
+            method = 'file'
+    except ImportError:
+        import mimetypes
+        mimetypes.init()
+        method = 'guess_type'
+
+    logging.info("Using magic method " + method)
+    if method == 'from_file':
+        return mime_from_file
+    if method == 'file':
+        return mime_file
+    if method == 'guess_type':
+        return mime_guess_type
+
+    logging.critical("unknown magic method!")
+
+
 # Scan the source code in the given directory (and all subdirectories)
 # and return the number of fatal problems encountered
 def scan_source(build_dir, root_dir, thisbuild):
@@ -1468,12 +1528,6 @@ def scan_source(build_dir, root_dir, thisbuild):
 
     scanignore_worked = set()
     scandelete_worked = set()
-
-    try:
-        ms = magic.open(magic.MIME_TYPE)
-        ms.load()
-    except AttributeError:
-        ms = None
 
     def toignore(fd):
         for p in scanignore:
@@ -1509,6 +1563,8 @@ def scan_source(build_dir, root_dir, thisbuild):
         logging.error('Found %s at %s' % (what, fd))
         return 1
 
+    get_mime_type = init_mime_type()
+
     # Iterate through all files in the source code
     for r, d, f in os.walk(build_dir, topdown=True):
 
@@ -1523,10 +1579,7 @@ def scan_source(build_dir, root_dir, thisbuild):
             fp = os.path.join(r, curfile)
             fd = fp[len(build_dir) + 1:]
 
-            try:
-                mime = magic.from_file(fp, mime=True) if ms is None else ms.file(fp)
-            except UnicodeError:
-                warnproblem('malformed magic number', fd)
+            mime = get_mime_type(fp)
 
             if mime == 'application/x-sharedlib':
                 count += handleproblem('shared library', fd, fp)
@@ -1534,7 +1587,7 @@ def scan_source(build_dir, root_dir, thisbuild):
             elif mime == 'application/x-archive':
                 count += handleproblem('static library', fd, fp)
 
-            elif mime == 'application/x-executable':
+            elif mime == 'application/x-executable' or mime == 'application/x-mach-binary':
                 count += handleproblem('binary executable', fd, fp)
 
             elif mime == 'application/x-java-applet':
@@ -1575,11 +1628,10 @@ def scan_source(build_dir, root_dir, thisbuild):
                 if not os.path.isfile(fp):
                     continue
                 for i, line in enumerate(file(fp)):
+                    i = i + 1
                     if any(suspect.match(line) for suspect in usual_suspects):
                         count += handleproblem('usual suspect at line %d' % i, fd, fp)
                         break
-    if ms is not None:
-        ms.close()
 
     for p in scanignore:
         if p not in scanignore_worked:
@@ -2029,9 +2081,9 @@ def genkeystore(localconfig):
                      '-keypass:file', config['keypassfile'],
                      '-dname', localconfig['keydname']])
     # TODO keypass should be sent via stdin
-    os.chmod(localconfig['keystore'], 0o0600)
     if p.returncode != 0:
         raise BuildException("Failed to generate key", p.output)
+    os.chmod(localconfig['keystore'], 0o0600)
     # now show the lovely key that was just generated
     p = FDroidPopen(['keytool', '-list', '-v',
                      '-keystore', localconfig['keystore'],
@@ -2070,3 +2122,40 @@ def string_is_integer(string):
         return True
     except ValueError:
         return False
+
+
+def download_file(url, local_filename=None, dldir='tmp'):
+    filename = url.split('/')[-1]
+    if local_filename is None:
+        local_filename = os.path.join(dldir, filename)
+    # the stream=True parameter keeps memory usage low
+    r = requests.get(url, stream=True)
+    with open(local_filename, 'wb') as f:
+        for chunk in r.iter_content(chunk_size=1024):
+            if chunk:  # filter out keep-alive new chunks
+                f.write(chunk)
+                f.flush()
+    return local_filename
+
+
+def get_per_app_repos():
+    '''per-app repos are dirs named with the packageName of a single app'''
+
+    # Android packageNames are Java packages, they may contain uppercase or
+    # lowercase letters ('A' through 'Z'), numbers, and underscores
+    # ('_'). However, individual package name parts may only start with
+    # letters. https://developer.android.com/guide/topics/manifest/manifest-element.html#package
+    p = re.compile('^([a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)*)?$')
+
+    repos = []
+    for root, dirs, files in os.walk(os.getcwd()):
+        for d in dirs:
+            print 'checking', root, 'for', d
+            if d in ('archive', 'metadata', 'repo', 'srclibs', 'tmp'):
+                # standard parts of an fdroid repo, so never packageNames
+                continue
+            elif p.match(d) \
+                    and os.path.exists(os.path.join(d, 'fdroid', 'repo', 'index.jar')):
+                repos.append(d)
+        break
+    return repos

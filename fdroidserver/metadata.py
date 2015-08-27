@@ -103,8 +103,9 @@ flag_defaults = OrderedDict([
     ('scandelete', []),
     ('build', ''),
     ('buildjni', []),
-    ('ndk', 'r9b'),  # defaults to oldest
+    ('ndk', 'r10e'),  # defaults to latest
     ('preassemble', []),
+    ('gradleprops', []),
     ('antcommands', None),
     ('novcheck', False),
 ])
@@ -522,7 +523,8 @@ def metafieldtype(name):
 
 def flagtype(name):
     if name in ['extlibs', 'srclibs', 'patch', 'rm', 'buildjni', 'preassemble',
-                'update', 'scanignore', 'scandelete', 'gradle', 'antcommands']:
+                'update', 'scanignore', 'scandelete', 'gradle', 'antcommands',
+                'gradleprops']:
         return 'list'
     if name in ['init', 'prebuild', 'build']:
         return 'script'
@@ -586,6 +588,9 @@ def parse_metadata(metafile):
     linedesc = None
 
     def add_buildflag(p, thisbuild):
+        if not p.strip():
+            raise MetaDataException("Empty build flag at {1}"
+                                    .format(buildlines[0], linedesc))
         bv = p.split('=', 1)
         if len(bv) != 2:
             raise MetaDataException("Invalid build flag at {0} in {1}"
