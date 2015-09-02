@@ -79,6 +79,7 @@ def main():
             prefix = os.path.dirname(os.path.dirname(__file__))  # use .egg layout
             if not prefix.endswith('.egg'):  # use UNIX layout
                 prefix = os.path.dirname(tmp)
+            prefix = '/usr'
             examplesdir = prefix + '/share/doc/fdroidserver/examples'
     else:
         # we're running straight out of the git repo
